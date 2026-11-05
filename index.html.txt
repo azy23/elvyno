@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="my">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>2-Person PWA Chat</title>
+  <meta name="theme-color" content="#4f46e5">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #f3f4f6; height: 100vh; display: flex; flex-direction: column; }
+    .header { background: #4f46e5; color: white; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .room-bar { background: #e0e7ff; color: #3730a3; padding: 6px 16px; font-size: 13px; font-weight: bold; display: flex; justify-content: space-between; }
+    .chat-box { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+    .msg { max-width: 75%; padding: 10px 14px; border-radius: 16px; font-size: 14px; line-height: 1.4; word-break: break-word; }
+    .msg.me { align-self: flex-end; background: #4f46e5; color: white; border-bottom-right-radius: 4px; }
+    .msg.other { align-self: flex-start; background: white; color: #1f2937; border-bottom-left-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+    .msg img { max-width: 100%; border-radius: 8px; margin-top: 5px; }
+    .msg audio { width: 100%; margin-top: 5px; }
+    .footer { background: white; padding: 8px 12px; display: flex; align-items: center; gap: 8px; border-top: 1px solid #e5e7eb; }
+    .input-box { flex: 1; border: 1px solid #d1d5db; border-radius: 20px; padding: 8px 16px; outline: none; font-size: 14px; }
+    .btn { background: #4f46e5; color: white; border: none; border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+    .btn-icon { background: none; border: none; font-size: 20px; cursor: pointer; padding: 4px; }
+    .call-btn { background: #10b981; }
+    .record-btn.recording { background: #ef4444; animation: pulse 1s infinite; }
+    @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+    .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
+    .modal-card { background: white; border-radius: 12px; padding: 24px; width: 85%; max-width: 320px; text-align: center; }
+    .modal-input { width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; margin: 15px 0; font-size: 16px; text-align: center; }
+    .modal-btn { background: #4f46e5; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; }
+  </style>
+</head>
+<body>
+
+  <div id="roomModal" class="modal">
+    <div class="modal-card">
+      <h3 style="margin-bottom:8px;">အခန်း ရွေးချယ်ပါ</h3>
+      <p style="font-size:13px; color:#6b7280;">စကားပြောမည့်သူနှင့် Room Code တူညီရပါမည်။</p>
+      <input type="text" id="roomInput" class="modal-input" placeholder="Room Code (ဥပမာ - 1234)" value="1234">
+      <button class="modal-btn" onclick="joinRoom()">ဝင်ရောက်မည်</button>
+    </div>
+  </div>
+
+  <div class="header">
+    <strong id="appTitle">PWA Chat</strong>
+    <div>
+      <button class="btn btn-icon" onclick="toggleLang()" title="Language">🌐</button>
+      <button class="btn btn-icon call-btn" onclick="startCall()" title="Call">📞</button>
+    </div>
+  </div>
+  <div class="room-bar">
+    <span id="roomStatus">Room: မရှိသေးပါ</span>
+    <span id="peerStatus" style="color: #10b981;">Online</span>
+  </div>
+
+  <div class="chat-box" id="chatBox"></div>
+
+  <div class="footer">
+    <label class="btn-icon" style="cursor:pointer;">
+      📷
+      <input type="file" id="imgUpload" accept="image/*" style="display:none;" onchange="sendImage(event)">
+    </label>
+    <button class="btn-icon" id="recBtn" onclick="toggleRecord()">🎤</button>
+    <input type="text" id="msgInput" class="input-box" placeholder="စာရိုက်ပါ..." onkeypress="handleKey(event)">
+    <button class="btn" onclick="sendText()">➤</button>
+  </div>
+
+  <script>
+    let currentRoom = "1234";
+    let isBurmese = true;
+    let audioCtx = null;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let isRecording = false;
+
+    // Web Audio Sound Generator
+    function playBeep(freq = 600, duration = 0.1) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.frequency.value = freq;
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duration);
+        osc.stop(audioCtx.currentTime + duration);
+      } catch(e) {}
+    }
+
+    function toggleLang() {
+      isBurmese = !isBurmese;
+      document.getElementById('msgInput').placeholder = isBurmese ? "စာရိုက်ပါ..." : "Type a message...";
+      document.getElementById('roomStatus').innerText = (isBurmese ? "အခန်း: " : "Room: ") + currentRoom;
+    }
+
+    function joinRoom() {
+      const val = document.getElementById('roomInput').value.trim();
+      if (val) currentRoom = val;
+      document.getElementById('roomStatus').innerText = (isBurmese ? "အခန်း: " : "Room: ") + currentRoom;
+      document.getElementById('roomModal').style.display = 'none';
+      setupBroadcast();
+    }
+
+    let channel = null;
+    function setupBroadcast() {
+      channel = new BroadcastChannel("pwa_chat_" + currentRoom);
+      channel.onmessage = (e) => {
+        appendMessage(e.data, 'other');
+        playBeep(800, 0.15);
+      };
+    }
+
+    function appendMessage(data, sender) {
+      const box = document.getElementById('chatBox');
+      const div = document.createElement('div');
+      div.className = 'msg ' + sender;
+
+      if (data.type === 'text') {
+        div.innerText = data.content;
+      } else if (data.type === 'image') {
+        const img = document.createElement('img');
+        img.src = data.content;
+        div.appendChild(img);
+      } else if (data.type === 'audio') {
+        const audio = document.createElement('audio');
+        audio.src = data.content;
+        audio.controls = true;
+        div.appendChild(audio);
+      }
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function sendText() {
+      const input = document.getElementById('msgInput');
+      const text = input.value.trim();
+      if (!text) return;
+      const data = { type: 'text', content: text };
+      if (channel) channel.postMessage(data);
+      appendMessage(data, 'me');
+      playBeep(400, 0.08);
+      input.value = "";
+    }
+
+    function handleKey(e) {
+      if (e.key === 'Enter') sendText();
+    }
+
+    function sendImage(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        const data = { type: 'image', content: evt.target.result };
+        if (channel) channel.postMessage(data);
+        appendMessage(data, 'me');
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function toggleRecord() {
+      const recBtn = document.getElementById('recBtn');
+      if (!isRecording) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mediaRecorder = new MediaRecorder(stream);
+          audioChunks = [];
+          mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+          mediaRecorder.onstop = () => {
+            const blob = new Blob(audioChunks, { type: 'audio/webm' });
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+              const data = { type: 'audio', content: evt.target.result };
+              if (channel) channel.postMessage(data);
+              appendMessage(data, 'me');
+            };
+            reader.readAsDataURL(blob);
+          };
+          mediaRecorder.start();
+          isRecording = true;
+          recBtn.classList.add('recording');
+        } catch(err) {
+          alert(isBurmese ? "မိုက်ခရိုဖုန်း ခွင့်ပြုချက် လိုအပ်ပါသည်။" : "Microphone permission required.");
+        }
+      } else {
+        mediaRecorder.stop();
+        isRecording = false;
+        recBtn.classList.remove('recording');
+      }
+    }
+
+    function startCall() {
+      alert(isBurmese ? "Voice Call စနစ်ကို စမ်းသပ်နေပါသည်..." : "Initiating Voice Call interface...");
+    }
+
+    // PWA Service Worker Registration
+    if ('serviceWorker' in navigator) {
+      const swCode = "self.addEventListener('install', e => e.waitUntil(self.skipWaiting()));";
+      const blob = new Blob([swCode], { type: 'application/javascript' });
+      navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(()=>{});
+    }
+  </script>
+</body>
+</html>
